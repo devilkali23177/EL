@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>INR Income & Expense Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 10px;
+      padding: 0;
+      transition: background 0.3s, color 0.3s;
+    }
+    .container {
+      max-width: 600px;
+      margin: auto;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 8px;
+      margin: 5px 0;
+      box-sizing: border-box;
+    }
+    ul { padding-left: 0; list-style: none; }
+    li { margin-bottom: 8px; }
+    canvas { 
+      max-width: 100%;
+      margin: 20px 0;
+      height: 300px !important;
+    }
+    .dark-mode {
+      background: #121212;
+      color: #eee;
+    }
+    .dark-mode input, .dark-mode select, .dark-mode button {
+      background: #1e1e1e;
+      color: #eee;
+      border: 1px solid #444;
+    }
+    .toggle-btn {
+      float: right;
+    }
+    .chart-container {
+      margin: 30px 0;
+      height: 400px;
+    }
+    .fixed-charts {
+      position: relative;
+      width: 100%;
+    }
+    .auth-container {
+      max-width: 400px;
+      margin: 50px auto;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+    .hidden {
+      display: none;
+    }
+    .error-message {
+      color: #f44336;
+      margin: 10px 0;
+    }
+    .success-message {
+      color: #4CAF50;
+      margin: 10px 0;
+    }
+    .auth-links {
+      margin-top: 15px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <!-- Authentication Screens -->
+  <div id="auth-container" class="auth-container">
+    <div id="login-view">
+      <h2>Login</h2>
+      <div id="login-error" class="error-message"></div>
+      <div id="login-success" class="success-message"></div>
+      <input type="email" id="login-email" placeholder="Email">
+      <input type="password" id="login-password" placeholder="Password">
+      <button onclick="login()">Login</button>
+      <div class="auth-links">
+        <a href="#" onclick="showView('register-view')">Create Account</a> | 
+        <a href="#" onclick="showView('reset-view')">Forgot Password?</a>
+      </div>
+    </div>
+
+    <div id="register-view" class="hidden">
+      <h2>Register</h2>
+      <div id="register-error" class="error-message"></div>
+      <input type="email" id="register-email" placeholder="Email">
+      <input type="password" id="register-password" placeholder="Password (min 6 chars)">
+      <button onclick="register()">Register</button>
+      <div class="auth-links">
+        <a href="#" onclick="showView('login-view')">Back to Login</a>
+      </div>
+    </div>
+
+    <div id="reset-view" class="hidden">
+      <h2>Reset Password</h2>
+      <div id="reset-error" class="error-message"></div>
+      <div id="reset-success" class="success-message"></div>
+      <input type="email" id="reset-email" placeholder="Your Email">
+      <button onclick="sendPasswordReset()">Send Reset Link</button>
+      <div class="auth-links">
+        <a href="#" onclick="showView('login-view')">Back to Login</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App (hidden until authenticated) -->
+  <div id="app-container" class="container hidden">
+    <h2>INR Income & Expense Tracker 
+      <button class="toggle-btn" onclick="toggleDark()">Toggle Dark Mode</button>
+      <button class="toggle-btn" onclick="logout()" style="margin-right: 10px;">Logout</button>
+    </h2>
+
+    <h3>Add Entry</h3>
+    <input type="text" id="desc" placeholder="Description">
+    <input type="number" id="amount" placeholder="Amount (₹)">
+    <input type="date" id="date">
+    <select id="type">
+      <option value="income">Income</option>
+      <option value="expense">Expense</option>
+    </select>
+    <input type="text" id="category" placeholder="Category (e.g. Food, Salary)">
+    <button onclick="addEntry()">Add</button>
+
+    <h3>Filter</h3>
+    <label>By Date: <input type="date" id="filterDate" onchange="loadEntries()"></label><br>
+    <label>By Month: <input type="month" id="filterMonth" onchange="loadEntries()"></label><br>
+    <label>By Year: <input type="number" id="filterYear" placeholder="e.g. 2025" onchange="loadEntries()"></label>
+
+    <h3>Summary</h3>
+    <p>Income: ₹<span id="totalIncome">0</span></p>
+    <p>Expense: ₹<span id="totalExpense">0</span></p>
+    <p>Balance: ₹<span id="balance">0</span></p>
+
+    <h3>Entries</h3>
+    <ul id="entryList"></ul>
+
+    <div class="fixed-charts">
+      <div class="chart-container">
+        <h3>Income by Category</h3>
+        <canvas id="incomeChart"></canvas>
+      </div>
+
+      <div class="chart-container">
+        <h3>Expenses by Category</h3>
+        <canvas id="expenseChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyD8Jn_pOd3ikyczCUGTu0rHB4MXZHNxCKU",
+      authDomain: "income-2dee6.firebaseapp.com",
+      databaseURL: "https://income-2dee6-default-rtdb.firebaseio.com",
+      projectId: "income-2dee6",
+      storageBucket: "income-2dee6.firebasestorage.app",
+      messagingSenderId: "800831075312",
+      appId: "1:800831075312:web:7e2cc2476533023d512335",
+      measurementId: "G-EZJTP0DCPD"
+    };
+    
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const auth = firebase.auth();
+    let dbRef;
+    let incomeChart = null;
+    let expenseChart = null;
+
+    // Authentication State Listener
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        // User is signed in
+        document.getElementById('auth-container').classList.add('hidden');
+        document.getElementById('app-container').classList.remove('hidden');
+        
+        // Initialize database reference with user UID
+        dbRef = db.ref(`users/${user.uid}/entries`);
+        loadEntries();
+      } else {
+        // User is signed out
+        document.getElementById('auth-container').classList.remove('hidden');
+        document.getElementById('app-container').classList.add('hidden');
+        showView('login-view');
+      }
+    });
+
+    // Auth View Management
+    function showView(viewId) {
+      document.querySelectorAll('#auth-container > div').forEach(div => {
+        div.classList.add('hidden');
+      });
+      document.getElementById(viewId).classList.remove('hidden');
+      clearAuthMessages();
+    }
+
+    function clearAuthMessages() {
+      document.querySelectorAll('.error-message, .success-message').forEach(el => {
+        el.textContent = '';
+      });
+    }
+
+    // Authentication Functions
+    function login() {
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+      const errorElement = document.getElementById('login-error');
+      
+      errorElement.textContent = '';
+      
+      auth.signInWithEmailAndPassword(email, password)
+        .catch(error => {
+          errorElement.textContent = error.message;
+        });
+    }
+
+    function register() {
+      const email = document.getElementById('register-email').value;
+      const password = document.getElementById('register-password').value;
+      const errorElement = document.getElementById('register-error');
+      
+      errorElement.textContent = '';
+      
+      if (password.length < 6) {
+        errorElement.textContent = 'Password must be at least 6 characters';
+        return;
+      }
+
+      auth.createUserWithEmailAndPassword(email, password)
+        .then(() => {
+          showView('login-view');
+          document.getElementById('login-success').textContent = 'Registration successful! Please login.';
+        })
+        .catch(error => {
+          errorElement.textContent = error.message;
+        });
+    }
+
+    function sendPasswordReset() {
+      const email = document.getElementById('reset-email').value;
+      const errorElement = document.getElementById('reset-error');
+      const successElement = document.getElementById('reset-success');
+      
+      errorElement.textContent = '';
+      successElement.textContent = '';
+      
+      auth.sendPasswordResetEmail(email)
+        .then(() => {
+          successElement.textContent = 'Password reset email sent. Check your inbox.';
+        })
+        .catch(error => {
+          errorElement.textContent = error.message;
+        });
+    }
+
+    function logout() {
+      auth.signOut();
+    }
+
+    // App Functions (same as before but now using user-specific dbRef)
+    function toggleDark() {
+      document.body.classList.toggle("dark-mode");
+      loadEntries();
+    }
+
+    function addEntry() {
+      const desc = document.getElementById("desc").value;
+      const amount = parseFloat(document.getElementById("amount").value);
+      const type = document.getElementById("type").value;
+      const date = document.getElementById("date").value;
+      const category = document.getElementById("category").value;
+      if (!desc || !amount || !date) return alert("Fill all fields");
+
+      dbRef.push({ desc, amount, type, date, category }, () => {
+        document.getElementById("desc").value = '';
+        document.getElementById("amount").value = '';
+        document.getElementById("date").value = '';
+        document.getElementById("category").value = '';
+        loadEntries();
+      });
+    }
+
+    function deleteEntry(key) {
+      dbRef.child(key).remove().then(loadEntries);
+    }
+
+    function loadEntries() {
+      const list = document.getElementById("entryList");
+      list.innerHTML = "";
+
+      const filterDate = document.getElementById("filterDate").value;
+      const filterMonth = document.getElementById("filterMonth").value;
+      const filterYear = document.getElementById("filterYear").value;
+
+      dbRef.once("value", snapshot => {
+        let income = 0, expense = 0;
+        const incomeData = {};
+        const expenseData = {};
+
+        snapshot.forEach(child => {
+          const item = child.val();
+          const itemDate = new Date(item.date);
+          if (filterDate && item.date !== filterDate) return;
+          if (filterMonth && item.date.slice(0, 7) !== filterMonth) return;
+          if (filterYear && itemDate.getFullYear().toString() !== filterYear) return;
+
+          const li = document.createElement("li");
+          li.innerHTML = `${item.date} - ${item.type.toUpperCase()}: ${item.desc} - ₹${item.amount} [${item.category}]
+            <button onclick="deleteEntry('${child.key}')">Delete</button>`;
+          list.appendChild(li);
+
+          if (item.type === "income") {
+            income += item.amount;
+            incomeData[item.category] = (incomeData[item.category] || 0) + item.amount;
+          } else {
+            expense += item.amount;
+            expenseData[item.category] = (expenseData[item.category] || 0) + item.amount;
+          }
+        });
+
+        document.getElementById("totalIncome").innerText = income.toFixed(2);
+        document.getElementById("totalExpense").innerText = expense.toFixed(2);
+        document.getElementById("balance").innerText = (income - expense).toFixed(2);
+
+        renderCharts(incomeData, expenseData);
+      });
+    }
+
+    function renderCharts(incomeData, expenseData) {
+      if (incomeChart) incomeChart.destroy();
+      if (expenseChart) expenseChart.destroy();
+
+      // Income Bar Chart
+      const incomeCtx = document.getElementById('incomeChart').getContext('2d');
+      incomeChart = new Chart(incomeCtx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(incomeData),
+          datasets: [{
+            label: 'Income (₹)',
+            data: Object.values(incomeData),
+            backgroundColor: '#4CAF50',
+            borderColor: document.body.classList.contains('dark-mode') ? '#333' : '#fff',
+            borderWidth: 1
+          }]
+        },
+        options: barChartOptions('Income by Category')
+      });
+
+      // Expense Bar Chart
+      const expenseCtx = document.getElementById('expenseChart').getContext('2d');
+      expenseChart = new Chart(expenseCtx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(expenseData),
+          datasets: [{
+            label: 'Expenses (₹)',
+            data: Object.values(expenseData),
+            backgroundColor: '#F44336',
+            borderColor: document.body.classList.contains('dark-mode') ? '#333' : '#fff',
+            borderWidth: 1
+          }]
+        },
+        options: barChartOptions('Expenses by Category')
+      });
+    }
+
+    function barChartOptions(title) {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              callback: function(value) {
+                return '₹' + value;
+              },
+              color: document.body.classList.contains('dark-mode') ? '#fff' : '#666'
+            },
+            grid: {
+              color: document.body.classList.contains('dark-mode') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            }
+          },
+          x: {
+            ticks: {
+              color: document.body.classList.contains('dark-mode') ? '#fff' : '#666'
+            },
+            grid: {
+              color: document.body.classList.contains('dark-mode') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            }
+          }
+        },
+        plugins: {
+          title: {
+            display: true,
+            text: title,
+            font: {
+              size: 16,
+              color: document.body.classList.contains('dark-mode') ? '#fff' : '#666'
+            }
+          },
+          legend: {
+            display: false
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return ` ₹${context.parsed.y.toFixed(2)}`;
+              }
+            }
+          }
+        }
+      };
+    }
+  </script>
+</body>
+</html>
